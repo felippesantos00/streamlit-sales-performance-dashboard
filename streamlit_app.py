@@ -2,171 +2,240 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# =====================
-# PAGE CONFIG
-# =====================
+# =====================================================
+# Page config
+# =====================================================
 st.set_page_config(
     page_title="Sales Performance Dashboard",
     layout="wide"
 )
 
-st.title("📊 Sales Performance Dashboard")
-st.caption("Upload an Excel or CSV file to analyze sales performance")
+# =====================================================
+# Sidebar - Navigation
+# =====================================================
+st.sidebar.title("📊 Navegação")
+page = st.sidebar.radio(
+    "Selecione a página:",
+    ["Dashboard", "Sobre o Projeto"]
+)
 
-# =====================
-# FILE UPLOAD
-# =====================
-uploaded_file = st.file_uploader(
-    "📥 Upload your sales file",
+# =====================================================
+# Upload
+# =====================================================
+st.sidebar.markdown("### 📂 Upload de Dados")
+uploaded_file = st.sidebar.file_uploader(
+    "Envie um arquivo Excel ou CSV",
     type=["xlsx", "csv"]
 )
 
-if not uploaded_file:
-    st.info("Please upload a CSV or Excel file to start the analysis.")
-    st.stop()
-
-# =====================
-# LOAD DATA
-# =====================
-
-
-@st.cache_data
-def load_file(file):
-    if file.name.endswith(".csv"):
-        try:
-            return pd.read_csv(file)
-        except UnicodeDecodeError:
-            return pd.read_csv(file, encoding="latin1")
+if uploaded_file:
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
     else:
-        return pd.read_excel(file)
+        df = pd.read_excel(uploaded_file)
 
+    # Padronização
+    df.columns = df.columns.str.lower()
 
-df = load_file(uploaded_file)
+    # Conversão de data
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+        df["month"] = df["date"].dt.to_period("M").astype(str)
 
-# =====================
-# VALIDATION
-# =====================
-required_columns = {
-    "Date", "Region", "City", "Sales_Rep", "Sales", "Target"
-}
+# =====================================================
+# DASHBOARD
+# =====================================================
+if page == "Dashboard":
 
-missing = required_columns - set(df.columns)
+    st.title("📈 Sales Performance Dashboard")
 
-if missing:
-    st.error(
-        f"The uploaded file is missing the following columns:\n"
-        f"{', '.join(missing)}"
+    if not uploaded_file:
+        st.warning("Faça o upload de um arquivo Excel ou CSV para iniciar.")
+        st.stop()
+
+    # =========================
+    # Filters
+    # =========================
+    col1, col2 = st.columns(2)
+
+    with col1:
+        region_filter = st.multiselect(
+            "Selecione a Região:",
+            options=df["region"].unique(),
+            default=df["region"].unique()
+        )
+
+    with col2:
+        rep_filter = st.multiselect(
+            "Selecione o Vendedor:",
+            options=df["sales_rep"].unique(),
+            default=df["sales_rep"].unique()
+        )
+
+    filtered_df = df[
+        (df["region"].isin(region_filter)) &
+        (df["sales_rep"].isin(rep_filter))
+    ]
+
+    # =========================
+    # KPIs
+    # =========================
+    total_sales = filtered_df["sales"].sum()
+    total_target = filtered_df["target"].sum()
+    achievement = (total_sales / total_target) * 100 if total_target > 0 else 0
+
+    k1, k2, k3 = st.columns(3)
+
+    k1.metric("💰 Total Sales", f"{total_sales:,.0f}")
+    k2.metric("🎯 Total Target", f"{total_target:,.0f}")
+    k3.metric("📊 Achievement", f"{achievement:.2f}%")
+
+    # =========================
+    # Sales by Rep
+    # =========================
+    st.markdown("### 🧑‍💼 Performance por Vendedor")
+
+    rep_perf = (
+        filtered_df
+        .groupby("sales_rep", as_index=False)
+        .agg({"sales": "sum"})
+        .sort_values("sales")
     )
-    st.stop()
 
-# =====================
-# DATA PREP
-# =====================
-df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-df = df.dropna(subset=["Date"])
+    fig_rep = px.bar(
+        rep_perf,
+        x="sales",
+        y="sales_rep",
+        orientation="h",
+        title="Total Sales por Vendedor"
+    )
 
-# =====================
-# SIDEBAR FILTERS
-# =====================
-st.sidebar.header("🔍 Filters")
+    st.plotly_chart(fig_rep, use_container_width=True)
 
-regions = st.sidebar.multiselect(
-    "Region",
-    options=sorted(df["Region"].unique()),
-    default=sorted(df["Region"].unique())
-)
+    # =========================
+    # Sales by Region
+    # =========================
+    st.markdown("### 🌍 Contribuição por Região")
 
-sales_reps = st.sidebar.multiselect(
-    "Sales Representative",
-    options=sorted(df["Sales_Rep"].unique()),
-    default=sorted(df["Sales_Rep"].unique())
-)
+    region_perf = (
+        filtered_df
+        .groupby("region", as_index=False)
+        .agg({"sales": "sum"})
+    )
 
-filtered_df = df[
-    (df["Region"].isin(regions)) &
-    (df["Sales_Rep"].isin(sales_reps))
-]
+    fig_region = px.pie(
+        region_perf,
+        values="sales",
+        names="region",
+        title="Participação por Região"
+    )
 
-# =====================
-# KPIs
-# =====================
-total_sales = filtered_df["Sales"].sum()
-total_target = filtered_df["Target"].sum()
-achievement = (total_sales / total_target * 100) if total_target > 0 else 0
+    st.plotly_chart(fig_region, use_container_width=True)
 
-top_rep = (
-    filtered_df.groupby("Sales_Rep")["Sales"]
-    .sum()
-    .sort_values(ascending=False)
-    .index[0]
-)
+    # =========================
+    # Real vs Target por Mês
+    # =========================
+    st.markdown("### 📆 Real vs Target por Mês")
 
-col1, col2, col3 = st.columns(3)
+    monthly_perf = (
+        filtered_df
+        .groupby("month", as_index=False)
+        .agg({
+            "sales": "sum",
+            "target": "sum"
+        })
+    )
 
-col1.metric("💰 Total Sales", f"${total_sales:,.0f}")
-col2.metric("🎯 Target Achievement", f"{achievement:.1f}%")
-col3.metric("🏆 Top Performer", top_rep)
+    fig_month = px.line(
+        monthly_perf,
+        x="month",
+        y=["sales", "target"],
+        markers=True,
+        title="Comparação Mensal: Real vs Target"
+    )
 
-st.divider()
+    st.plotly_chart(fig_month, use_container_width=True)
 
-# =====================
-# SALES BY REP
-# =====================
-rep_sales = (
-    filtered_df.groupby("Sales_Rep", as_index=False)["Sales"]
-    .sum()
-    .sort_values("Sales")
-)
+    # =========================
+    # INSIGHTS AUTOMÁTICOS
+    # =========================
+    st.markdown("### 🧠 Insights Automáticos")
 
-fig_rep = px.bar(
-    rep_sales,
-    x="Sales",
-    y="Sales_Rep",
-    orientation="h",
-    title="Sales Performance by Representative"
-)
+    best_rep = rep_perf.iloc[-1]["sales_rep"]
+    worst_rep = rep_perf.iloc[0]["sales_rep"]
 
-st.plotly_chart(fig_rep, use_container_width=True)
+    best_month = monthly_perf.loc[
+        monthly_perf["sales"].idxmax(), "month"
+    ]
 
-# =====================
-# SALES BY REGION
-# =====================
-fig_region = px.pie(
-    filtered_df,
-    values="Sales",
-    names="Region",
-    title="Sales Contribution by Region"
-)
+    worst_month = monthly_perf.loc[
+        monthly_perf["sales"].idxmin(), "month"
+    ]
 
-st.plotly_chart(fig_region, use_container_width=True)
+    gap = total_target - total_sales
 
-# =====================
-# SALES TREND
-# =====================
-trend_df = (
-    filtered_df
-    .groupby(["Date", "Region"], as_index=False)["Sales"]
-    .sum()
-)
+    st.info(
+        f"""
+        🔹 **Top Performer:** {best_rep} lidera em vendas totais.  
+        🔹 **Atenção:** {worst_rep} apresenta o menor desempenho e pode se beneficiar de coaching.  
+        🔹 **Melhor mês:** {best_month} teve o maior volume de vendas.  
+        🔹 **Pior mês:** {worst_month} indica uma possível queda de performance.  
+        🔹 **Gap para o Target:** faltam {gap:,.0f} em vendas para atingir a meta total.
+        """
+    )
 
-fig_trend = px.line(
-    trend_df,
-    x="Date",
-    y="Sales",
-    color="Region",
-    title="Sales Trend Over Time"
-)
+# =====================================================
+# SOBRE O PROJETO
+# =====================================================
+else:
+    st.title("📘 Sobre o Projeto")
 
-st.plotly_chart(fig_trend, use_container_width=True)
+    st.markdown("""
+### Project Overview
 
-# =====================
-# FOOTER
-# =====================
-st.markdown("---")
-st.markdown(
-    """
-    ### 🙋 About the Author
-    **Felippe Santos**  
-    🔗 [LinkedIn](https://www.linkedin.com/in/felippe-santos-54058111a/)
-    """
-)
+Este projeto consiste no desenvolvimento de um **Dashboard Interativo de Performance de Vendas**, utilizando **Streamlit**, com foco em **usuários não técnicos**.
+
+O dashboard permite acompanhar o desempenho de vendas por região, vendedor e período, comparando resultados reais com metas estabelecidas.
+
+---
+
+### Key Objectives
+
+• Centralizar a visualização da performance de vendas  
+• Identificar vendedores e regiões com melhor e pior desempenho  
+• Acompanhar metas e tendências ao longo do tempo  
+• Facilitar análises rápidas e autônomas para stakeholders  
+
+---
+
+### Key Features
+
+**Interactive Filtering**
+• Filtros dinâmicos por região e vendedor  
+
+**Visual Analytics**
+• Gráficos de barras, pizza e linhas  
+• Comparação mensal Real vs Target  
+
+**Automated Insights**
+• Geração automática de insights textuais  
+
+**Data Upload**
+• Suporte para arquivos Excel (.xlsx) e CSV (.csv)  
+
+---
+
+### Tools & Skills Used
+
+• Python  
+• Streamlit  
+• Pandas  
+• Plotly  
+• Data Analysis & Storytelling  
+
+---
+
+### Outcome
+
+O dashboard permite decisões mais rápidas, identifica oportunidades de melhoria e oferece uma visão clara e acionável da performance comercial.
+""")
