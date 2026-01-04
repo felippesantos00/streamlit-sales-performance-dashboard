@@ -11,18 +11,18 @@ st.set_page_config(
 )
 
 st.title("📊 Sales Performance Dashboard")
-st.caption("Upload an Excel file to analyze sales performance")
+st.caption("Upload an Excel or CSV file to analyze sales performance")
 
 # =====================
 # FILE UPLOAD
 # =====================
 uploaded_file = st.file_uploader(
-    "📥 Upload your sales Excel file",
-    type=["xlsx"]
+    "📥 Upload your sales file",
+    type=["xlsx", "csv"]
 )
 
 if not uploaded_file:
-    st.info("Please upload an Excel file to start the analysis.")
+    st.info("Please upload a CSV or Excel file to start the analysis.")
     st.stop()
 
 # =====================
@@ -31,11 +31,17 @@ if not uploaded_file:
 
 
 @st.cache_data
-def load_excel(file):
-    return pd.read_excel(file)
+def load_file(file):
+    if file.name.endswith(".csv"):
+        try:
+            return pd.read_csv(file)
+        except UnicodeDecodeError:
+            return pd.read_csv(file, encoding="latin1")
+    else:
+        return pd.read_excel(file)
 
 
-df = load_excel(uploaded_file)
+df = load_file(uploaded_file)
 
 # =====================
 # VALIDATION
@@ -44,13 +50,20 @@ required_columns = {
     "Date", "Region", "City", "Sales_Rep", "Sales", "Target"
 }
 
-if not required_columns.issubset(df.columns):
+missing = required_columns - set(df.columns)
+
+if missing:
     st.error(
-        f"Excel file must contain the following columns:\n{', '.join(required_columns)}"
+        f"The uploaded file is missing the following columns:\n"
+        f"{', '.join(missing)}"
     )
     st.stop()
 
-df["Date"] = pd.to_datetime(df["Date"])
+# =====================
+# DATA PREP
+# =====================
+df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+df = df.dropna(subset=["Date"])
 
 # =====================
 # SIDEBAR FILTERS
@@ -58,15 +71,15 @@ df["Date"] = pd.to_datetime(df["Date"])
 st.sidebar.header("🔍 Filters")
 
 regions = st.sidebar.multiselect(
-    "Select Region",
-    options=df["Region"].unique(),
-    default=df["Region"].unique()
+    "Region",
+    options=sorted(df["Region"].unique()),
+    default=sorted(df["Region"].unique())
 )
 
 sales_reps = st.sidebar.multiselect(
-    "Select Sales Representative",
-    options=df["Sales_Rep"].unique(),
-    default=df["Sales_Rep"].unique()
+    "Sales Representative",
+    options=sorted(df["Sales_Rep"].unique()),
+    default=sorted(df["Sales_Rep"].unique())
 )
 
 filtered_df = df[
@@ -84,7 +97,8 @@ achievement = (total_sales / total_target * 100) if total_target > 0 else 0
 top_rep = (
     filtered_df.groupby("Sales_Rep")["Sales"]
     .sum()
-    .idxmax()
+    .sort_values(ascending=False)
+    .index[0]
 )
 
 col1, col2, col3 = st.columns(3)
@@ -99,9 +113,8 @@ st.divider()
 # SALES BY REP
 # =====================
 rep_sales = (
-    filtered_df.groupby("Sales_Rep")["Sales"]
+    filtered_df.groupby("Sales_Rep", as_index=False)["Sales"]
     .sum()
-    .reset_index()
     .sort_values("Sales")
 )
 
@@ -128,13 +141,12 @@ fig_region = px.pie(
 st.plotly_chart(fig_region, use_container_width=True)
 
 # =====================
-# TREND OVER TIME
+# SALES TREND
 # =====================
 trend_df = (
     filtered_df
-    .groupby(["Date", "Region"])["Sales"]
+    .groupby(["Date", "Region"], as_index=False)["Sales"]
     .sum()
-    .reset_index()
 )
 
 fig_trend = px.line(
